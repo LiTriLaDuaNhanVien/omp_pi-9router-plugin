@@ -1,0 +1,13 @@
+# Local credentials and configuration (never commit these)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+**/auth.json
+**/9router.json
+**/models.yml
+**/models.yaml
+node_modules/

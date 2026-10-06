@@ -1,0 +1,10 @@
+{
+  "name": "omp-plugin-9router",
+  "version": "0.1.0",
+  "description": "Registers 9Router (decolua/9router) as a model provider in oh-my-pi",
+  "type": "module",
+  "private": true,
+  "omp": {
+    "extensions": ["./index.ts"]
+  }
+}
