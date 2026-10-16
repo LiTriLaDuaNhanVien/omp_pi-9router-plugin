@@ -115,6 +115,24 @@ never leaves omp's auth store**.
 When `/login` succeeds after startup discovery failed, the plugin registers
 the freshly discovered models immediately — no `/reload` needed.
 
+### Multiple servers
+
+Run `/9router` to list, add, update endpoints, remove, or check profiles. The
+existing `9router` provider is the reserved `default` profile. For example,
+add alias `work` with its server's `/v1` URL, then run `/login 9router-work`
+to store its API key with the host's credential storage. Select its models via
+`/model 9router-work/<model-id>`. Each profile has an independent model list
+and key. Profiles are stored as endpoints only in `9router.json`; existing
+`baseUrl` entries remain the default profile. The default key and URL env vars
+apply only to `9router`, not to aliases. You can also use per-provider keys in
+`models.yml` under `providers.9router-work.apiKey` (OMP).
+
+Removing a profile unregisters it immediately but **does not erase its saved
+key**. Use `/logout 9router-work` to clear that credential if supported by your
+host, or remove it through the host's credential manager. If you re-add the
+same alias, the saved credential can be reused. Changing a profile's endpoint
+retains its key, so log in again if the new server needs a different key.
+
 ## Overrides
 
 | Env var               | Default                         | Effect                          |
@@ -125,7 +143,7 @@ the freshly discovered models immediately — no `/reload` needed.
 ## Usage
 
 ```text
-/9router                    # probe connectivity + list discovered models
+/9router                    # manage profiles or check connectivity
 /model 9router/default      # pick a routed model (autocomplete lists all 97)
 ```
 

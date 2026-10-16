@@ -29,6 +29,29 @@ import { join } from "node:path";
 const PROVIDER_ID = "9router";
 const DEFAULT_BASE_URL = "http://localhost:20128/v1";
 const PROBE_TIMEOUT_MS = 8_000;
+const aliasPattern = /^[a-z][a-z0-9-]{0,31}$/;
+const providerId = (alias: string) => alias === "default" ? PROVIDER_ID : `${PROVIDER_ID}-${alias}`;
+const normalize = (url: string) => url.trim().replace(/\/+$/, "");
+
+type ProfileState = { baseUrl?: string; profiles?: Record<string, { baseUrl: string }> };
+function loadState(agentDir: string): ProfileState {
+	try {
+		const state = JSON.parse(readFileSync(join(agentDir, "9router.json"), "utf-8")) as ProfileState;
+		if (state && typeof state === "object" && !Array.isArray(state)) return state;
+	} catch { /* First run. */ }
+	return {};
+}
+function saveState(agentDir: string, state: ProfileState): void {
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(join(agentDir, "9router.json"), JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
+}
+function profilesFrom(state: ProfileState): Record<string, string> {
+	const profiles: Record<string, string> = {};
+	for (const [alias, entry] of Object.entries(state.profiles ?? {})) {
+		if (alias !== "default" && aliasPattern.test(alias) && typeof entry?.baseUrl === "string" && /^https?:\/\//.test(entry.baseUrl)) profiles[alias] = normalize(entry.baseUrl);
+	}
+	return profiles;
+}
 
 /**
  * Endpoint, in precedence order: NINEROUTER_BASE_URL env > state file written
@@ -125,6 +148,8 @@ export default async function nineRouterProvider(pi: ExtensionAPI) {
 	// Mutable: /login may switch endpoint and credential mid-session.
 	let baseUrl = loadBaseUrl(agentDir);
 	let apiKey = resolveApiKey(agentDir);
+	const profiles = profilesFrom(loadState(agentDir));
+	const keys: Record<string, string | undefined> = {};
 
 	async function login({ onAuth, onPrompt, onProgress, signal }: {
 		onAuth?: (details: { url: string; instructions: string }) => void;
@@ -161,11 +186,11 @@ export default async function nineRouterProvider(pi: ExtensionAPI) {
 				throw new Error("NINEROUTER_BASE_URL is exported in your shell; unset it or set it to this URL.");
 			}
 			mkdirSync(agentDir, { recursive: true });
-			writeFileSync(join(agentDir, "9router.json"), JSON.stringify({ baseUrl: url }, null, 2) + "\n");
+			saveState(agentDir, { ...loadState(agentDir), baseUrl: url });
 		}
 		baseUrl = url;
 		apiKey = key;
-		registerProvider(url, key, live.models);
+		registerProvider("default", url, key, live.models);
 		return key;
 	}
 
@@ -174,14 +199,37 @@ export default async function nineRouterProvider(pi: ExtensionAPI) {
 		login,
 	};
 
-	function registerProvider(url: string, key: string | undefined, models: Required<NineRouterModel>[]): void {
-		pi.registerProvider(PROVIDER_ID, {
+	function registerProvider(alias: string, url: string, key: string | undefined, models: Required<NineRouterModel>[]): void {
+		pi.registerProvider(providerId(alias), {
 			baseUrl: url,
 			api: "openai-completions",
 			apiKey: key,
 			authHeader: true,
-			oauth,
-			models: models.map((m) => {
+			oauth: alias === "default" ? oauth : {
+				name: `9Router (${alias})`,
+				async login({ onPrompt, onProgress, signal }: Parameters<typeof login>[0]) {
+					if (!onPrompt) throw new Error("Interactive login required");
+					const value = (await onPrompt({ message: `API key for ${alias} (${profiles[alias]})`, placeholder: "sk-…" })).trim();
+					if (!value) throw new Error("API key required");
+					onProgress?.(`Checking ${alias}…`);
+					const live = await probeModels(profiles[alias], value, signal);
+					if (!live.ok) throw new Error(`${alias}: ${live.error ?? `HTTP ${live.status}`}`);
+					keys[alias] = value;
+					registerProvider(alias, profiles[alias], value, live.models);
+					return value;
+				},
+			},
+			fetchDynamicModels: async (resolvedKey) => {
+				const live = await probeModels(alias === "default" ? baseUrl : profiles[alias], resolvedKey);
+				if (!live.ok) throw new Error(`${providerId(alias)}: ${live.error ?? `HTTP ${live.status}`}`);
+				return mapModels(live.models);
+			},
+			models: mapModels(models),
+		});
+	}
+
+	function mapModels(models: Required<NineRouterModel>[]) {
+		return models.map((m) => {
 				const caps = m.capabilities ?? {};
 				const contextWindow = caps.contextWindow ?? m.context_length ?? 128_000;
 				return {
@@ -193,43 +241,69 @@ export default async function nineRouterProvider(pi: ExtensionAPI) {
 					supportsTools: caps.tools ?? true,
 					input: caps.vision ? ["text", "image"] : ["text"],
 				};
-			}),
-		});
+			});
 	}
 
 	// Register auth before probing. OMP 18.1+ requires `apiKey` or `oauth`
 	// whenever runtime registration includes models; zero models keeps /login
 	// available even when the endpoint is down or no key exists yet.
-	registerProvider(baseUrl, apiKey, []);
+	registerProvider("default", baseUrl, apiKey, []);
+	for (const [alias, url] of Object.entries(profiles)) registerProvider(alias, url, undefined, []);
 
 	const result = await probeModels(baseUrl, apiKey);
-	if (result.ok && result.models.length > 0) {
-		registerProvider(baseUrl, apiKey, result.models);
-	}
+	if (result.ok && result.models.length > 0) registerProvider("default", baseUrl, apiKey, result.models);
 
-	// /9router — health probe: reachability, auth, discovered model list.
 	pi.registerCommand("9router", {
-		description: "Show 9Router connectivity status and discovered models",
+		description: "Manage 9Router profiles and check connectivity",
 		handler: async (_args, ctx) => {
-			const live = await probeModels(baseUrl, apiKey);
-
-			if (!live.ok) {
-				const detail = live.error ?? `HTTP ${live.status}`;
-				const hint =
-					live.status === 401 || live.status === 403
-						? `Set NINEROUTER_API_KEY, or pin providers.9router.apiKey in ${join(agentDir, "models.yml")}.`
-						: `Check that 9Router is serving at ${baseUrl}.`;
-				ctx.ui.notify(`9router unreachable at ${baseUrl}: ${detail}. ${hint}`, "error");
+			const action = await ctx.ui.select("9Router profiles", ["List", "Add", "Update endpoint", "Remove", "Check"]);
+			if (!action) return;
+			if (action === "List") {
+				ctx.ui.notify([`default: ${baseUrl} → 9router`, ...Object.entries(profiles).map(([a, u]) => `${a}: ${u} → ${providerId(a)}`)].join("\n"), "info");
 				return;
 			}
-
-			const ids = live.models.map((m) => m.id);
-			const preview = ids.slice(0, 10).join(", ");
-			const suffix = ids.length > 10 ? `, … (+${ids.length - 10} more)` : "";
-			ctx.ui.notify(
-				`9router ok at ${baseUrl} — ${ids.length} model(s): ${preview}${suffix}. Select with /model 9router/<id>.`,
-				"info",
-			);
+			if (action === "Add") {
+				const alias = (await ctx.ui.input("Profile alias (lowercase letters, digits, hyphens)", "work"))?.trim();
+				if (!alias) return;
+				if (alias === "default" || !aliasPattern.test(alias) || profiles[alias]) { ctx.ui.notify("Invalid or existing alias", "error"); return; }
+				const url = normalize((await ctx.ui.input("9Router API endpoint", DEFAULT_BASE_URL)) ?? "");
+				if (!/^https?:\/\/[^/]+/.test(url)) { ctx.ui.notify("Invalid http(s) endpoint", "error"); return; }
+				profiles[alias] = url;
+				try { const state = loadState(agentDir); state.profiles = { ...state.profiles, [alias]: { baseUrl: url } }; saveState(agentDir, state); }
+				catch (error) { delete profiles[alias]; ctx.ui.notify(String(error), "error"); return; }
+				registerProvider(alias, url, undefined, []);
+				ctx.ui.notify(`Added ${providerId(alias)}. Run /login ${providerId(alias)} to save its key.`, "info");
+				return;
+			}
+			const alias = await ctx.ui.select("Profile", ["default", ...Object.keys(profiles)]);
+			if (!alias) return;
+			if (action === "Remove") {
+				if (alias === "default") { ctx.ui.notify("The default profile cannot be removed", "error"); return; }
+				if (!await ctx.ui.confirm("Remove profile", `Remove ${alias}? Its saved credential remains until /logout ${providerId(alias)}.`)) return;
+				const state = loadState(agentDir); if (state.profiles) delete state.profiles[alias];
+				saveState(agentDir, state); delete profiles[alias]; delete keys[alias]; pi.unregisterProvider(providerId(alias));
+				ctx.ui.notify(`Removed ${alias}. Run /logout ${providerId(alias)} to clear its saved key.`, "info");
+				return;
+			}
+			if (action === "Update endpoint") {
+				const current = alias === "default" ? baseUrl : profiles[alias];
+				const url = normalize((await ctx.ui.input("New API endpoint", current)) ?? "");
+				if (!/^https?:\/\/[^/]+/.test(url)) { ctx.ui.notify("Invalid http(s) endpoint", "error"); return; }
+				if (alias === "default" && process.env.NINEROUTER_BASE_URL && normalize(process.env.NINEROUTER_BASE_URL) !== url) { ctx.ui.notify("Unset NINEROUTER_BASE_URL first", "error"); return; }
+				const state = loadState(agentDir);
+				if (alias === "default") state.baseUrl = url;
+				else state.profiles = { ...state.profiles, [alias]: { baseUrl: url } };
+				saveState(agentDir, state);
+				if (alias === "default") baseUrl = url; else profiles[alias] = url;
+				const key = alias === "default" ? apiKey : keys[alias] ?? await ctx.modelRegistry.getApiKeyForProvider(providerId(alias));
+				const live = await probeModels(url, key);
+				registerProvider(alias, url, key, live.ok ? live.models : []);
+				ctx.ui.notify(`Updated ${providerId(alias)}. ${live.ok ? `${live.models.length} models` : "Probe failed; check credentials"}.`, live.ok ? "info" : "warning");
+				return;
+			}
+			const url = alias === "default" ? baseUrl : profiles[alias];
+			const live = await probeModels(url, alias === "default" ? apiKey : keys[alias] ?? await ctx.modelRegistry.getApiKeyForProvider(providerId(alias)));
+			ctx.ui.notify(live.ok ? `${providerId(alias)}: ${live.models.length} models at ${url}. Select /model ${providerId(alias)}/<id>` : `${providerId(alias)} at ${url}: ${live.error ?? `HTTP ${live.status}`}`, live.ok ? "info" : "error");
 		},
 	});
 }
