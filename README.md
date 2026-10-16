@@ -82,7 +82,9 @@ instead. For later updates, run `git pull --ff-only` inside your clone and
 restart Pi (or use `/reload`); a local-path Pi install loads that checkout,
 not a copied snapshot. For a one-off test without installation, from the
 repository root run `pi --no-extensions -e ./pi/index.ts --list-models`.
-See [Pi-specific instructions](pi/README.md) for verification and profiles.
+See [Pi-specific instructions](pi/README.md) for verification and profiles —
+including a curl one-liner that installs `pi/` from the GitHub tarball without
+Git.
 Do not run `pi install .`: the repository root contains the OMP package.
 
 ### Troubleshooting OMP `/login`

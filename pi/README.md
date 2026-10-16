@@ -6,8 +6,8 @@ Do not run `pi install .` from the repository root.
 
 ## Install (Pi)
 
-Requirements: Pi (`pi` in `PATH`), Git, and a running 9Router server for
-model discovery. From a fresh checkout:
+Requirements: Pi (`pi` in `PATH`), and a running 9Router server for model
+discovery. From a fresh checkout (requires Git):
 
 ```bash
 git clone https://github.com/LiTriLaDuaNhanVien/omp-9router-plugin.git
@@ -23,6 +23,28 @@ loads the checkout in place; for updates run `git pull --ff-only` in the clone
 and restart Pi (or use `/reload`). To install for just one trusted project,
 use `pi install -l ./pi` inside that project with the appropriate absolute
 source path; Pi will ask you to trust project configuration.
+
+### Install with curl (no Git needed)
+
+Download the repository tarball straight from GitHub, extract it to a permanent
+directory, and install the `pi/` package from there:
+
+```bash
+mkdir -p ~/.pi/omp-9router-plugin \
+  && curl -fsSL https://github.com/LiTriLaDuaNhanVien/omp-9router-plugin/archive/refs/heads/main.tar.gz \
+    | tar -xz --strip-components=1 -C ~/.pi/omp-9router-plugin \
+  && pi install ~/.pi/omp-9router-plugin/pi
+```
+
+Extract to a **permanent** directory (not `/tmp`): a local-path install loads
+that checkout in place, so the files must survive reboots. To update, re-run the
+same `curl … | tar …` line and restart Pi (or `/reload`). To uninstall, run
+`pi remove ~/.pi/omp-9router-plugin/pi` and delete the directory.
+
+Do **not** install the bare repository URL or root (`pi install
+git:github.com/LiTriLaDuaNhanVien/omp-9router-plugin` or `pi install .`): the
+repository root is the OMP package, and Pi would load nothing from it. Always
+install the extracted `pi` subdirectory as shown above.
 
 Test once without installing (from the repository root):
 
