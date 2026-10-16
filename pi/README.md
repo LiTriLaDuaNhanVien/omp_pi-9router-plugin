@@ -1,14 +1,77 @@
 # Native Pi 9Router extension
 
-This is the Pi version of the OMP provider in the repository root. Install with the source path on the **same command line** (run from the repository root):
+This directory contains the **Pi** version (`pi/index.ts`). For **OMP** use
+the root `index.ts` instead; see the [OMP installation guide](../README.md#install-for-omp-oh-my-pi).
+Do not run `pi install .` from the repository root.
 
-```sh
+## Install (Pi)
+
+Requirements: Pi (`pi` in `PATH`), Git, and a running 9Router server for
+model discovery. From a fresh checkout:
+
+```bash
+git clone https://github.com/LiTriLaDuaNhanVien/omp-9router-plugin.git
+cd omp-9router-plugin
 pi install ./pi
+pi list
 ```
 
-From another directory, use `pi install /path/to/omp-plugin-9router/pi` instead. Running `pi install` without a source reports “Missing install source”; entering the path alone tries to execute a directory.
+If already cloned, run `pi install /absolute/path/to/omp-9router-plugin/pi`
+from any directory. `pi install` needs the source path **on the same line**;
+`pi install` by itself reports “Missing install source”. A local-path install
+loads the checkout in place; for updates run `git pull --ff-only` in the clone
+and restart Pi (or use `/reload`). To install for just one trusted project,
+use `pi install -l ./pi` inside that project with the appropriate absolute
+source path; Pi will ask you to trust project configuration.
 
-Or test without installing: `pi --extension ./pi/index.ts --list-models`.
-Restart Pi and use `/login 9router` (or `/login` and select 9Router). Enter the 9Router endpoint (default `http://localhost:20128/v1`) and API key. Select a model with `/model 9router/<model-id>`. `/9router` checks connectivity. The endpoint is stored in `~/.pi/agent/9router.json`; credentials are stored by Pi in its auth store. Run `/9router` to manage named profiles (list, add, update endpoint, remove, check). Add an alias such as `work`, then use `/login 9router-work` and `/model 9router-work/<model-id>`. The original `9router` provider remains the reserved default. Each alias uses a separate key and catalog. Removing a profile does not delete its saved credential; use `/logout 9router-work` to clear it. Endpoint changes keep the old credential until you log in again. `PI_CODING_AGENT_DIR` changes the agent directory; `NINEROUTER_BASE_URL` overrides the stored endpoint and `NINEROUTER_API_KEY` can supply an environment key.
+Test once without installing (from the repository root):
 
-Model discovery requires a running 9Router `/v1/models` endpoint. If unavailable at startup, login remains registered and model discovery can be retried after login or via Pi's model refresh. Pricing is reported as zero because 9Router does not supply reliable per-model prices.
+```bash
+pi --no-extensions -e ./pi/index.ts --list-models
+```
+
+`--no-extensions` here avoids a duplicate if another copy is already installed;
+explicit `-e` still loads this file. If the endpoint is offline or lacks a key,
+there may be no models yet; the extension can still offer login. Do not load
+both an installed copy and `-e` together in normal use.
+
+## First login and profiles
+
+Restart Pi and run `/login 9router` (or choose 9Router from `/login`). Enter
+the endpoint (default `http://localhost:20128/v1`) and API key, then select
+`/model 9router/<model-id>`. Run `/9router` to list, add, update endpoints,
+remove, or check profiles. For a second server add alias `work` with its `/v1`
+URL, run `/login 9router-work` for its key, then select
+`/model 9router-work/<model-id>`. `default` is reserved for the original
+`9router` provider.
+
+Endpoints are stored in `~/.pi/agent/9router.json`; keys stay in Pi's auth
+store. Removing a profile **does not delete its saved credential**; clear it
+through Pi's logout/credential management if desired. Changing an endpoint
+keeps the old key until you log in again. `PI_CODING_AGENT_DIR` changes the
+agent directory. `NINEROUTER_BASE_URL` and `NINEROUTER_API_KEY` affect only
+the default profile.
+
+Model discovery requires a working `/v1/models` endpoint. Login remains
+available if discovery fails at startup; retry after login or refresh models.
+Pricing is reported as zero because 9Router does not supply reliable prices.
+
+## Token-limit 400 errors
+
+Advertised output is clamped to 131072 tokens because gateways that inflate
+the output budget make hosts request a `contextWindow − input` completion that
+upstreams with a smaller real limit reject with 400 "exceeds the model's
+maximum context length". If the advertised **context window** itself is wrong
+(e.g. ~508k claimed for glm-5.3 while the upstream enforces 400k), fix it per
+model in `~/.pi/agent/models.json`; unknown ids are ignored:
+
+```json
+{
+  "modelOverrides": {
+    "9router-black/glm-5.3": { "contextWindow": 400000 }
+  }
+}
+```
+
+Use the exact id shown by `/model 9router-black/`; a smaller value leaves
+more headroom for large replies.

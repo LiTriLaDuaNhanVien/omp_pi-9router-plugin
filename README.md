@@ -11,7 +11,10 @@ providers only receive explicit model lists from `pi.registerProvider`, so
 context windows, vision, reasoning, and tool support are mapped from
 9Router's per-model capabilities.
 
-## Install
+## Install for OMP (oh-my-pi)
+
+The OMP extension is **`index.ts` at the repository root**. Install this
+version if you run `omp`; do not install the `pi/` subdirectory into OMP.
 
 ### Linux/macOS
 
@@ -63,7 +66,26 @@ The plugin is a plain oh-my-pi extension package (`omp.extensions` manifest in
 
 Restart `omp` (or `/reload`) after changing the local extension path.
 
-### Troubleshooting `/login`
+## Install for Pi (native Pi, not OMP)
+
+Pi uses **`pi/index.ts`**, not the root OMP extension. Clone the repository
+once and install its `pi/` package by path:
+
+```bash
+git clone https://github.com/LiTriLaDuaNhanVien/omp-9router-plugin.git
+cd omp-9router-plugin
+pi install ./pi
+```
+
+If you already cloned the repository, run `pi install /absolute/path/to/omp-9router-plugin/pi`
+instead. For later updates, run `git pull --ff-only` inside your clone and
+restart Pi (or use `/reload`); a local-path Pi install loads that checkout,
+not a copied snapshot. For a one-off test without installation, from the
+repository root run `pi --no-extensions -e ./pi/index.ts --list-models`.
+See [Pi-specific instructions](pi/README.md) for verification and profiles.
+Do not run `pi install .`: the repository root contains the OMP package.
+
+### Troubleshooting OMP `/login`
 
 Confirm the clone landed in the active agent directory:
 
@@ -165,6 +187,23 @@ individual ids.
   resets. That is gateway-side. The plugin treats failed discovery as a model
   probe failure: native `/login` remains registered, while unavailable model
   rows are withheld until a successful login or restart.
+- Advertised output limits are clamped to 131072 tokens: some gateways report
+  an output budget close to the context window, hosts then request a
+  completion of `contextWindow − input` tokens, and upstreams with a smaller
+  real limit reject the request with 400 "exceeds the model's maximum context
+  length". If a model still fails because the advertised **context window**
+  itself is larger than the upstream's real limit (e.g. a gateway claims
+  ~508k for glm-5.3 while the upstream enforces 400k), correct it for that
+  model id in `$(omp config path)/models.yml` — including profiles:
+
+  ```yaml
+  modelOverrides:
+    "9router-black/glm-5.3":
+      contextWindow: 400000
+  ```
+
+  Find the exact id with `/model 9router-black/`. A smaller value (e.g.
+  380000) leaves more headroom for large replies.
 - Verified end-to-end with a configured hosted 9Router endpoint: model
   discovery, text generation, and a `read` tool round-trip through
   `omp --print` all succeeded.

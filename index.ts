@@ -29,6 +29,15 @@ import { join } from "node:path";
 const PROVIDER_ID = "9router";
 const DEFAULT_BASE_URL = "http://localhost:20128/v1";
 const PROBE_TIMEOUT_MS = 8_000;
+/*
+ * Gateways sometimes advertise an output budget nearly as large as the assumed
+ * context window; hosts then request `contextWindow - input` completion tokens
+ * and upstreams with a smaller real limit reject the whole request with 400
+ * "exceeds the model's maximum context length". Clamp the advertised output so
+ * the completion request stays small; correct a wrong contextWindow with a
+ * modelOverrides entry in models.yml (see README).
+ */
+const MAX_OUTPUT_CEILING = 131_072;
 const aliasPattern = /^[a-z][a-z0-9-]{0,31}$/;
 const providerId = (alias: string) => alias === "default" ? PROVIDER_ID : `${PROVIDER_ID}-${alias}`;
 const normalize = (url: string) => url.trim().replace(/\/+$/, "");
@@ -230,18 +239,18 @@ export default async function nineRouterProvider(pi: ExtensionAPI) {
 
 	function mapModels(models: Required<NineRouterModel>[]) {
 		return models.map((m) => {
-				const caps = m.capabilities ?? {};
-				const contextWindow = caps.contextWindow ?? m.context_length ?? 128_000;
-				return {
-					id: m.id,
-					name: m.id,
-					contextWindow,
-					maxTokens: caps.maxOutput ?? m.max_completion_tokens ?? Math.min(16_384, contextWindow),
-					reasoning: caps.reasoning ?? false,
-					supportsTools: caps.tools ?? true,
-					input: caps.vision ? ["text", "image"] : ["text"],
-				};
-			});
+			const caps = m.capabilities ?? {};
+			const contextWindow = caps.contextWindow ?? m.context_length ?? 128_000;
+			return {
+				id: m.id,
+				name: m.id,
+				contextWindow,
+				maxTokens: Math.min(caps.maxOutput ?? m.max_completion_tokens ?? Math.min(16_384, contextWindow), MAX_OUTPUT_CEILING),
+				reasoning: caps.reasoning ?? false,
+				supportsTools: caps.tools ?? true,
+				input: caps.vision ? ["text", "image"] : ["text"],
+			};
+		});
 	}
 
 	// Register auth before probing. OMP 18.1+ requires `apiKey` or `oauth`

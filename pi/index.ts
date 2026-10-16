@@ -6,6 +6,9 @@ import { homedir } from "node:os";
 const DEFAULT_URL = "http://localhost:20128/v1";
 const normalize = (url: string) => url.trim().replace(/\/+$/, "");
 const validAlias = /^[a-z][a-z0-9-]{0,31}$/;
+// Clamp advertised output: hosts request `contextWindow - input` completion tokens,
+// and gateways that inflate output/context make upstreams reject with 400.
+const MAX_OUTPUT_CEILING = 131072;
 const id = (alias: string) => alias === "default" ? "9router" : `9router-${alias}`;
 type State = { baseUrl?: string; profiles?: Record<string, { baseUrl: string }> };
 type RouterModel = { id: string; capabilities?: { vision?: boolean; reasoning?: boolean; contextWindow?: number; maxOutput?: number }; context_length?: number; max_completion_tokens?: number };
@@ -40,7 +43,7 @@ export default async function (pi: ExtensionAPI) {
   if (!Array.isArray(data.data)) throw new Error(data.error || "Unexpected /models response");
   return data.data.filter((m) => typeof m.id === "string").map((m) => {
    const contextWindow = m.capabilities?.contextWindow || m.context_length || 128000;
-   return { id: m.id, name: m.id, reasoning: m.capabilities?.reasoning ?? false, input: m.capabilities?.vision ? ["text", "image"] : ["text"], contextWindow, maxTokens: m.capabilities?.maxOutput || m.max_completion_tokens || Math.min(16384, contextWindow), cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+   return { id: m.id, name: m.id, reasoning: m.capabilities?.reasoning ?? false, input: m.capabilities?.vision ? ["text", "image"] : ["text"], contextWindow, maxTokens: Math.min(m.capabilities?.maxOutput || m.max_completion_tokens || Math.min(16384, contextWindow), MAX_OUTPUT_CEILING), cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   });
  }
  type LoginCallbacks = { onAuth: (info: { url: string; instructions?: string }) => void; onPrompt: (info: { message: string; placeholder?: string; allowEmpty?: boolean }) => Promise<string>; onProgress?: (message: string) => void; signal?: AbortSignal };
